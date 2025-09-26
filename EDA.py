@@ -210,3 +210,114 @@ def plot_entropy_gini_scatter(df, split="train"):
     plt.tight_layout()
     plt.show()
 
+
+# Histogramas
+def plot_class_histograms(
+    obj_detallado: Dict[str, Dict[str, Any]],
+    split: str = "train",
+    max_cols: int = 3,
+    figsize_per_plot: Tuple[int, int] = (5, 3)
+):
+    
+    datasets = [ds for ds in obj_detallado if split in obj_detallado[ds]]
+
+    n = len(datasets)
+    ncols = min(max_cols, n)
+    nrows = int(np.ceil(n / ncols))
+
+    fig, axes = plt.subplots(
+        nrows=nrows, ncols=ncols,
+        figsize=(figsize_per_plot[0]*ncols, figsize_per_plot[1]*nrows),
+        squeeze=False
+    )
+
+    for idx, ds_name in enumerate(datasets):
+        ax = axes[idx // ncols][idx % ncols]
+
+        info = obj_detallado[ds_name][split]
+        counts = np.array(info["class_counts"])
+        labels = info["labels"]
+        if labels is not None:
+            label_names = [labels[k] for k in sorted(labels.keys())]
+        else:
+            label_names = [str(i) for i in range(len(counts))]
+
+        sns.barplot(x=np.arange(len(counts)), y=counts, ax=ax, palette="viridis")
+        ax.set_title(f"{ds_name} ({split})")
+        ax.set_xticks(range(len(counts)))
+        ax.set_xticklabels(label_names, rotation=45, ha='right', fontsize=8)
+        ax.set_ylabel("Nº muestras")
+        ax.set_xlabel("Clase")
+
+    
+    for j in range(idx+1, nrows*ncols):
+        fig.delaxes(axes[j // ncols][j % ncols])
+
+    fig.tight_layout()
+    plt.show()
+
+
+#Correlaciones
+def plot_rgb_channel_correlations(
+    datasets: Optional[Iterable[str]] = None,
+    split: str = "train",
+    sample_size: int = 1000,
+    download: bool = False,
+    random_state: int = 42,
+    max_cols: int = 3,
+    figsize_per_plot: Tuple[int,int] = (4,3)
+):
+   
+    if datasets is None:
+        datasets = listar_datasets_medmnist(include_3d=False)
+
+    n = len(datasets)
+    ncols = min(max_cols, n)
+    nrows = int(np.ceil(n / ncols))
+
+    fig, axes = plt.subplots(
+        nrows=nrows, ncols=ncols,
+        figsize=(figsize_per_plot[0]*ncols, figsize_per_plot[1]*nrows),
+        squeeze=False
+    )
+
+    for idx, ds_name in enumerate(datasets):
+        ax = axes[idx // ncols][idx % ncols]
+
+        info = INFO[ds_name]
+        class_name = info["python_class"]
+        DatasetClass = getattr(import_module("medmnist"), class_name)
+        ds = DatasetClass(split=split, download=download)
+
+        imgs = ds.imgs  # (n, h, w, c)
+        if imgs.ndim != 4 or imgs.shape[-1] < 3:
+            ax.axis("off")
+            ax.set_title(f"{ds_name}\n(no RGB)")
+            continue
+
+        n_total = imgs.shape[0]
+        rng = np.random.default_rng(random_state+idx)
+        idxs = rng.choice(n_total, size=min(sample_size, n_total), replace=False)
+        sample_imgs = imgs[idxs]
+
+        # separar canales
+        R = sample_imgs[:,:,:,0].ravel().astype(np.float32)
+        G = sample_imgs[:,:,:,1].ravel().astype(np.float32)
+        B = sample_imgs[:,:,:,2].ravel().astype(np.float32)
+
+        data = np.vstack([R,G,B])
+        corr = np.corrcoef(data)
+
+        sns.heatmap(
+            corr, annot=True, fmt=".2f", cmap="coolwarm",
+            xticklabels=["R","G","B"], yticklabels=["R","G","B"],
+            vmin=-1, vmax=1, ax=ax, cbar=False
+        )
+        ax.set_title(f"{ds_name} ({split})")
+
+    
+    for j in range(idx+1, nrows*ncols):
+        fig.delaxes(axes[j // ncols][j % ncols])
+
+    fig.tight_layout()
+    plt.show()
