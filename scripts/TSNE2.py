@@ -18,6 +18,7 @@ class TSNEVisualizer:
         split: str = "train",
         samples_per_dataset: int = 1000,
         perplexity: float = 30.0,
+        color_mode: str = "grayscale",
         random_state: int = 42,
         download: bool = False,
         verbose: int = 1,
@@ -29,6 +30,10 @@ class TSNEVisualizer:
         self.split = split
         self.samples_per_dataset = samples_per_dataset
         self.perplexity = perplexity
+        allowed_color_modes = {"grayscale", "original"}
+        if color_mode not in allowed_color_modes:
+            raise ValueError(f"color_mode debe ser uno de {allowed_color_modes}")
+        self.color_mode = color_mode
         self.random_state = random_state
         self.download = download
         self.verbose = verbose
@@ -56,7 +61,7 @@ class TSNEVisualizer:
 
     def _prepare_features(self) -> None:
         rng = np.random.default_rng(self.random_state)
-        feature_chunks = []
+        image_batches = []
         dataset_chunks = []
         class_chunks = []
 
@@ -70,14 +75,22 @@ class TSNEVisualizer:
             else:
                 indices = np.arange(total_samples)
 
-            imgs = ds.imgs[indices]
+            imgs = self._normalize_batch(ds.imgs[indices])
             labels = ds.labels[indices].reshape(-1)
 
-            features = self._flatten_images(imgs)
-            feature_chunks.append(features)
-            dataset_chunks.append(np.full(features.shape[0], dataset_name))
+            image_batches.append(imgs)
+            dataset_chunks.append(np.full(imgs.shape[0], dataset_name))
             class_chunks.append(labels)
             self._label_maps[dataset_name] = labels_map
+
+        processed_batches = self._apply_color_mode(image_batches)
+        feature_chunks = [self._flatten_images(batch) for batch in processed_batches]
+        feature_dims = {chunk.shape[1] for chunk in feature_chunks}
+        if len(feature_dims) != 1:
+            raise ValueError(
+                "No se pudieron alinear las dimensiones de las características en modo "
+                f"{self.color_mode}. Dimensiones detectadas: {sorted(feature_dims)}"
+            )
 
         self._features = np.concatenate(feature_chunks, axis=0)
         self._dataset_labels = np.concatenate(dataset_chunks, axis=0)
@@ -184,8 +197,7 @@ class TSNEVisualizer:
                 return labels_map[key]
         return f"clase {int(class_value)}"
 
-    @staticmethod
-    def _flatten_images(imgs: np.ndarray) -> np.ndarray:
+    def _normalize_batch(self, imgs: np.ndarray) -> np.ndarray:
         imgs = imgs.astype("float32")
         if imgs.ndim == 4:
             channel_axis = None
@@ -193,16 +205,63 @@ class TSNEVisualizer:
                 if imgs.shape[axis] in {1, 3}:
                     channel_axis = axis
                     break
-            if channel_axis is not None and channel_axis != imgs.ndim - 1:
+            if channel_axis is None:
+                raise ValueError(f"No se encontró eje de canales en imágenes con forma {imgs.shape}")
+            if channel_axis != imgs.ndim - 1:
                 imgs = np.moveaxis(imgs, channel_axis, -1)
-            if imgs.shape[-1] == 1:
-                imgs = imgs[..., 0]
-            elif imgs.shape[-1] == 3:
-                imgs = imgs.mean(axis=-1)
-            else:
-                imgs = imgs.reshape(imgs.shape[0], -1)
-                return imgs / 255.0
-        if imgs.ndim != 3:
+        elif imgs.ndim == 3:
+            imgs = imgs[..., np.newaxis]
+        else:
             raise ValueError(f"Formato de imagen no soportado: {imgs.shape}")
+        return imgs
+
+    def _apply_color_mode(self, batches: List[np.ndarray]) -> List[np.ndarray]:
+        processed: List[np.ndarray] = []
+
+        if self.color_mode == "grayscale":
+            for batch in batches:
+                if batch.ndim == 4 and batch.shape[-1] == 1:
+                    processed.append(batch[..., 0])
+                elif batch.ndim == 4:
+                    processed.append(batch.mean(axis=-1))
+                elif batch.ndim == 3:
+                    processed.append(batch)
+                else:
+                    raise ValueError(f"No se puede convertir a escala de grises el lote con forma {batch.shape}")
+            return processed
+
+        # color_mode == "original"
+        has_color = any(batch.shape[-1] > 1 for batch in batches)
+        target_channels = 3 if has_color else 1
+
+        for batch in batches:
+            if batch.ndim == 3:
+                batch = batch[..., np.newaxis]
+            if batch.ndim != 4:
+                raise ValueError(f"Formato de imagen no soportado: {batch.shape}")
+
+            channels = batch.shape[-1]
+            if channels == target_channels:
+                processed.append(batch)
+            elif channels == 1 and target_channels == 3:
+                processed.append(np.repeat(batch, 3, axis=-1))
+            elif channels == 3 and target_channels == 1:
+                processed.append(batch.mean(axis=-1, keepdims=True))
+            else:
+                raise ValueError(
+                    f"No se puede ajustar el número de canales de {channels} a {target_channels} para forma {batch.shape}"
+                )
+
+        if any(batch.shape[-1] != target_channels for batch in processed):
+            shapes = [batch.shape for batch in processed]
+            raise ValueError(f"Inconsistencia en los canales tras procesar: {shapes}")
+
+        return processed
+
+    @staticmethod
+    def _flatten_images(imgs: np.ndarray) -> np.ndarray:
+        if imgs.ndim not in {3, 4}:
+            raise ValueError(f"Formato de imagen no soportado tras preprocesamiento: {imgs.shape}")
+
         num_samples = imgs.shape[0]
         return imgs.reshape(num_samples, -1) / 255.0
