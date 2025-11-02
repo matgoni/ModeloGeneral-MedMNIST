@@ -110,11 +110,7 @@ class ConjuntoGeneralMedMNIST(Dataset):
         lista_transformaciones.extend(
             [
                 transforms.ToTensor(),
-                transforms.Lambda(
-                    lambda tensor: tensor.repeat(3, 1, 1)
-                    if tensor.shape[0] == 1
-                    else tensor
-                ),
+                TransformacionGrisesACanales(),
                 transforms.Normalize(
                     mean=[0.485, 0.456, 0.406],
                     std=[0.229, 0.224, 0.225],
@@ -124,12 +120,32 @@ class ConjuntoGeneralMedMNIST(Dataset):
         return transforms.Compose(lista_transformaciones)
 
     @staticmethod
-    def _a_pil(imagen: np.ndarray) -> Image.Image:
-        """Convierte un arreglo numpy a imagen PIL manteniendo el modo correcto."""
+    def _procesar_imagen_numpy(imagen: np.ndarray) -> Image.Image:
+        """Convierte un arreglo numpy a imagen PIL manejando 2D, 3D y 4D."""
         if imagen.ndim == 2:
             return Image.fromarray(imagen.astype(np.uint8), mode="L")
         if imagen.ndim == 3:
-            return Image.fromarray(imagen.astype(np.uint8))
+            if imagen.shape[0] in {1, 3}:
+                imagen = np.moveaxis(imagen, 0, -1)
+            if imagen.shape[-1] == 1:
+                return Image.fromarray(imagen[..., 0].astype(np.uint8), mode="L")
+            if imagen.shape[-1] == 3:
+                return Image.fromarray(imagen.astype(np.uint8))
+            proyeccion = imagen.max(axis=0)
+            return Image.fromarray(proyeccion.astype(np.uint8), mode="L")
+        if imagen.ndim == 4:
+            if imagen.shape[0] in {1, 3}:
+                # Estructura (C, D, H, W); colapsamos la dimensión de profundidad.
+                comprimido = imagen.max(axis=1)
+                return ConjuntoGeneralMedMNIST._procesar_imagen_numpy(comprimido)
+            if imagen.shape[-1] in {1, 3}:
+                # Estructura (D, H, W, C); colapsamos la profundidad.
+                comprimido = imagen.max(axis=0)
+                return ConjuntoGeneralMedMNIST._procesar_imagen_numpy(comprimido)
+            proyeccion = imagen.max(axis=0)
+            if proyeccion.ndim == 2:
+                return Image.fromarray(proyeccion.astype(np.uint8), mode="L")
+            return ConjuntoGeneralMedMNIST._procesar_imagen_numpy(proyeccion)
         raise ValueError(f"Dimensiones de imagen no soportadas: {imagen.shape}")
 
     def __len__(self) -> int:
@@ -144,7 +160,7 @@ class ConjuntoGeneralMedMNIST(Dataset):
 
         imagen, etiqueta = dataset[indice_local]
         if isinstance(imagen, np.ndarray):
-            imagen = self._a_pil(imagen)
+            imagen = self._procesar_imagen_numpy(imagen)
         if isinstance(etiqueta, (np.ndarray, list)):
             etiqueta = self._convertir_etiqueta(np.array(etiqueta))
         etiqueta_global = offset + int(etiqueta)
@@ -195,6 +211,18 @@ class ConjuntoGeneralMedMNIST(Dataset):
             return 0
 
         raise ValueError(f"No se puede convertir la etiqueta con forma {etiqueta.shape} a entero.")
+
+
+class TransformacionGrisesACanales:
+    """Replica canales de tensores en escala de grises a 3 canales."""
+
+    def __call__(self, tensor: torch.Tensor) -> torch.Tensor:
+        if tensor.dim() == 3 and tensor.shape[0] == 1:
+            return tensor.repeat(3, 1, 1)
+        return tensor
+
+    def __repr__(self) -> str:  # pragma: no cover
+        return f"{self.__class__.__name__}()"
 
 
 def construir_modelo(total_clases: int, usar_pesos_imagenet: bool) -> nn.Module:

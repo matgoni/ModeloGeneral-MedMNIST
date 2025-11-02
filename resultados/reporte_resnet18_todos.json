@@ -1,0 +1,174 @@
+{
+  "fecha": "2025-11-02T09:46:03.480367",
+  "configuracion": {
+    "datasets": [
+      "bloodmnist",
+      "breastmnist",
+      "chestmnist",
+      "dermamnist",
+      "octmnist",
+      "organamnist",
+      "organcmnist",
+      "organsmnist",
+      "pathmnist",
+      "pneumoniamnist",
+      "retinamnist",
+      "tissuemnist"
+    ],
+    "epocas": 5,
+    "tamano_lote": 256,
+    "tasa_aprendizaje": 0.001,
+    "decaimiento_peso": 0.0001,
+    "tamano_imagen": 28,
+    "usar_aumentos": true,
+    "descargar": true,
+    "sin_preentrenar": false,
+    "dispositivo": "cpu",
+    "salida": "resultados/reporte_resnet18_todos.json",
+    "trabajadores": 4,
+    "scheduler": "plateau",
+    "factor_scheduler": 0.5,
+    "paciencia_scheduler": 3
+  },
+  "historial_epocas": [
+    {
+      "epoca": 1,
+      "perdida_entrenamiento": 0.9901418965795816,
+      "exactitud_entrenamiento": 0.667843875138708,
+      "perdida_validacion": 0.930087148103667,
+      "exactitud_validacion": 0.6798075695006173
+    },
+    {
+      "epoca": 2,
+      "perdida_entrenamiento": 0.8536893544127145,
+      "exactitud_entrenamiento": 0.7101114488348531,
+      "perdida_validacion": 0.89644318852288,
+      "exactitud_validacion": 0.7047270353498801
+    },
+    {
+      "epoca": 3,
+      "perdida_entrenamiento": 0.8133121269493584,
+      "exactitud_entrenamiento": 0.7243267235972403,
+      "perdida_validacion": 0.8228592586924697,
+      "exactitud_validacion": 0.721302169809982
+    },
+    {
+      "epoca": 4,
+      "perdida_entrenamiento": 0.7891137910976236,
+      "exactitud_entrenamiento": 0.7319226130168379,
+      "perdida_validacion": 0.8063702873964613,
+      "exactitud_validacion": 0.7310514141371138
+    },
+    {
+      "epoca": 5,
+      "perdida_entrenamiento": 0.7713228800077425,
+      "exactitud_entrenamiento": 0.7378028658271819,
+      "perdida_validacion": 0.8230171932399265,
+      "exactitud_validacion": 0.7171016220358466
+    }
+  ],
+  "metricas_prueba": {
+    "perdida": 1.0367853807276062,
+    "exactitud": 0.6610626885685551,
+    "detalle_por_dataset": {
+      "bloodmnist": {
+        "exactitud": 0.8564747149956153,
+        "ejemplos": 3421
+      },
+      "organamnist": {
+        "exactitud": 0.8377207784902688,
+        "ejemplos": 17778
+      },
+      "pneumoniamnist": {
+        "exactitud": 0.8317307692307693,
+        "ejemplos": 624
+      },
+      "pathmnist": {
+        "exactitud": 0.8285515320334261,
+        "ejemplos": 7180
+      },
+      "breastmnist": {
+        "exactitud": 0.7371794871794872,
+        "ejemplos": 156
+      },
+      "dermamnist": {
+        "exactitud": 0.7067331670822943,
+        "ejemplos": 2005
+      },
+      "octmnist": {
+        "exactitud": 0.653,
+        "ejemplos": 1000
+      },
+      "chestmnist": {
+        "exactitud": 0.6369634021307895,
+        "ejemplos": 22433
+      },
+      "organcmnist": {
+        "exactitud": 0.6231742940603701,
+        "ejemplos": 8216
+      },
+      "organsmnist": {
+        "exactitud": 0.6026962727993656,
+        "ejemplos": 8827
+      },
+      "tissuemnist": {
+        "exactitud": 0.581070219966159,
+        "ejemplos": 47280
+      },
+      "retinamnist": {
+        "exactitud": 0.5,
+        "ejemplos": 400
+      }
+    }
+  },
+  "datasets": {
+    "bloodmnist": {
+      "offset": 0,
+      "clases": 8
+    },
+    "breastmnist": {
+      "offset": 8,
+      "clases": 2
+    },
+    "chestmnist": {
+      "offset": 10,
+      "clases": 14
+    },
+    "dermamnist": {
+      "offset": 24,
+      "clases": 7
+    },
+    "octmnist": {
+      "offset": 31,
+      "clases": 4
+    },
+    "organamnist": {
+      "offset": 35,
+      "clases": 11
+    },
+    "organcmnist": {
+      "offset": 46,
+      "clases": 11
+    },
+    "organsmnist": {
+      "offset": 57,
+      "clases": 11
+    },
+    "pathmnist": {
+      "offset": 68,
+      "clases": 9
+    },
+    "pneumoniamnist": {
+      "offset": 77,
+      "clases": 2
+    },
+    "retinamnist": {
+      "offset": 79,
+      "clases": 5
+    },
+    "tissuemnist": {
+      "offset": 84,
+      "clases": 8
+    }
+  }
+}
