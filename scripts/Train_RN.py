@@ -72,10 +72,11 @@ class ConjuntoGeneralMedMNIST(Dataset):
             if nombre not in INFO:
                 raise ValueError(f"Dataset '{nombre}' no existe en medmnist.INFO.")
 
-            clase_python = INFO[nombre]["python_class"]
+            info_dataset = INFO[nombre]
+            clase_python = info_dataset["python_class"]
             dataset_clase = getattr(import_module("medmnist"), clase_python)
             dataset = dataset_clase(split=self.split, download=self.descarga)
-            clases = int(INFO[nombre]["n_classes"])
+            clases = self._inferir_numero_clases(info_dataset, nombre)
             indice_base = self.total_clases
             self._informacion[nombre] = RegistroDataset(
                 nombre=nombre, indice_inicial=indice_base, clases=clases
@@ -145,7 +146,7 @@ class ConjuntoGeneralMedMNIST(Dataset):
         if isinstance(imagen, np.ndarray):
             imagen = self._a_pil(imagen)
         if isinstance(etiqueta, (np.ndarray, list)):
-            etiqueta = int(np.array(etiqueta).squeeze())
+            etiqueta = self._convertir_etiqueta(np.array(etiqueta))
         etiqueta_global = offset + int(etiqueta)
 
         tensor_imagen = self.transformacion(imagen)
@@ -154,6 +155,46 @@ class ConjuntoGeneralMedMNIST(Dataset):
     def obtener_informacion(self) -> Dict[str, RegistroDataset]:
         """Devuelve el diccionario con offsets y clases por dataset."""
         return self._informacion
+
+    @staticmethod
+    def _inferir_numero_clases(info: Dict[str, object], nombre: str) -> int:
+        """Obtiene el número de clases, tolerando entradas sin 'n_classes'."""
+        if "n_classes" in info:
+            return int(info["n_classes"])
+
+        etiquetas = info.get("label")
+        if isinstance(etiquetas, dict) and etiquetas:
+            return len(etiquetas)
+
+        tarea = str(info.get("task", "")).lower()
+        if "multi-label" in tarea:
+            if isinstance(etiquetas, dict) and etiquetas:
+                return len(etiquetas)
+            raise ValueError(
+                f"No se pudo inferir el número de clases para el dataset multi-etiqueta '{nombre}'."
+            )
+
+        raise ValueError(
+            f"No se encontró 'n_classes' ni 'label' para el dataset '{nombre}'."
+        )
+
+    @staticmethod
+    def _convertir_etiqueta(etiqueta: np.ndarray) -> int:
+        """Convierte etiquetas de distintos formatos a un índice entero."""
+        etiqueta = np.array(etiqueta).squeeze()
+
+        if etiqueta.ndim == 0:
+            return int(etiqueta.item())
+
+        if etiqueta.ndim == 1:
+            # Para problemas multi-etiqueta seleccionamos la primera clase positiva;
+            # si no hay ninguna, devolvemos 0 para mantener la consistencia.
+            indices_positivos = np.flatnonzero(etiqueta)
+            if indices_positivos.size > 0:
+                return int(indices_positivos[0])
+            return 0
+
+        raise ValueError(f"No se puede convertir la etiqueta con forma {etiqueta.shape} a entero.")
 
 
 def construir_modelo(total_clases: int, usar_pesos_imagenet: bool) -> nn.Module:
