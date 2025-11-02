@@ -1,3 +1,5 @@
+# --- TSNE por conjunto  de datos
+
 import torch
 from sklearn.manifold import TSNE
 import matplotlib.pyplot as plt

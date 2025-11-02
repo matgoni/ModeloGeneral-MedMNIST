@@ -1,3 +1,5 @@
+# ---- TSNE combinado para múltiples datasets de MedMNIST
+
 import inspect
 from typing import List, Optional, Sequence, Union
 

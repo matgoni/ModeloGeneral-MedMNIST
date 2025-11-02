@@ -1,3 +1,5 @@
+# --- Calculo del coeficiente de silouette para datasets 
+
 from typing import List, Optional, Sequence, Union
 
 import numpy as np
