@@ -1,10 +1,11 @@
-# --- Train del modelos ResNet-18 -> clasificador general MedMNIST
+# --- Train del modelos EfficientNet-B0 -> clasificador general MedMNIST
 
-"""Script para entrenar un modelo ResNet-18 como clasificador general de MedMNIST.
+"""Script para entrenar un modelo EfficientNet-B0 desde cero (pesos aleatorios) como
+clasificador general de MedMNIST.
 
-Este módulo permite combinar múltiples conjuntos de MedMNIST en un único modelo,
-ajustar hiperparámetros desde la línea de comandos, generar reportes de métricas
-y evaluar el modelo resultante en el conjunto de test.
+Combina múltiples conjuntos de MedMNIST en un único modelo, calcula la métrica
+inicial antes de entrenar para medir la ganancia, y genera gráficas de pérdidas
+y exactitud para visualizar la mejora a lo largo de las épocas.
 """
 
 from __future__ import annotations
@@ -18,6 +19,9 @@ from importlib import import_module
 from pathlib import Path
 from typing import Dict, Iterable, List, Optional, Tuple
 
+import matplotlib
+matplotlib.use("Agg")
+import matplotlib.pyplot as plt
 import numpy as np
 import torch
 import torch.nn as nn
@@ -27,7 +31,8 @@ from torch.optim import Adam, Optimizer
 from torch.optim.lr_scheduler import ReduceLROnPlateau
 from torch.utils.data import DataLoader, Dataset
 from torchvision import transforms
-from torchvision.models import ResNet18_Weights, resnet18
+from torchvision.models import efficientnet_b0
+
 
 
 @dataclass
@@ -42,6 +47,12 @@ class RegistroDataset:
 class ConjuntoGeneralMedMNIST(Dataset):
     """Dataset que concatena múltiples conjuntos de MedMNIST en un solo objeto."""
 
+    class _RepeatChannels:
+        """Convierte imágenes de 1 canal a 3 canales preservando tensores."""
+
+        def __call__(self, tensor: torch.Tensor) -> torch.Tensor:
+            return tensor.repeat(3, 1, 1) if tensor.shape[0] == 1 else tensor
+
     def __init__(
         self,
         nombres_dataset: Iterable[str],
@@ -49,8 +60,6 @@ class ConjuntoGeneralMedMNIST(Dataset):
         descarga: bool,
         tamano_imagen: int,
         usar_aumentos: bool,
-        mapa_offsets: Optional[Dict[str, int]] = None,
-        total_clases_global: Optional[int] = None,
     ) -> None:
         self.nombres_dataset = list(nombres_dataset)
         if not self.nombres_dataset:
@@ -60,12 +69,10 @@ class ConjuntoGeneralMedMNIST(Dataset):
         self.descarga = descarga
         self.tamano_imagen = tamano_imagen
         self.usar_aumentos = usar_aumentos
-        self._offsets_global = mapa_offsets or {}
-        self._total_clases_global = total_clases_global
 
         self._registros: List[Dict[str, object]] = []
         self._informacion: Dict[str, RegistroDataset] = {}
-        self.total_clases = total_clases_global if total_clases_global is not None else 0
+        self.total_clases = 0
 
         self._construir_registros()
         self.transformacion = self._construir_transformacion()
@@ -76,19 +83,12 @@ class ConjuntoGeneralMedMNIST(Dataset):
             if nombre not in INFO:
                 raise ValueError(f"Dataset '{nombre}' no existe en medmnist.INFO.")
 
-            info_dataset = INFO[nombre]
-            clase_python = info_dataset["python_class"]
+            clase_python = INFO[nombre]["python_class"]
             dataset_clase = getattr(import_module("medmnist"), clase_python)
             dataset = dataset_clase(split=self.split, download=self.descarga)
-            clases = self._inferir_numero_clases(info_dataset, nombre)
-            if self._offsets_global:
-                if nombre not in self._offsets_global:
-                    raise ValueError(
-                        f"El dataset '{nombre}' no se encuentra en el mapa global de offsets."
-                    )
-                indice_base = self._offsets_global[nombre]
-            else:
-                indice_base = self.total_clases
+            info_dataset = INFO[nombre]
+            clases = int(info_dataset.get("n_classes") or len(info_dataset["label"]))
+            indice_base = self.total_clases
             self._informacion[nombre] = RegistroDataset(
                 nombre=nombre, indice_inicial=indice_base, clases=clases
             )
@@ -103,13 +103,8 @@ class ConjuntoGeneralMedMNIST(Dataset):
                     }
                 )
 
-            if not self._offsets_global:
-                self.total_clases += clases
+            self.total_clases += clases
 
-        if self._offsets_global and self._total_clases_global is None:
-            raise ValueError(
-                "Debe proporcionarse 'total_clases_global' cuando se usa un mapa global de offsets."
-            )
     def _construir_transformacion(self) -> transforms.Compose:
         """Crea las transformaciones de preprocesamiento y aumentos."""
         lista_transformaciones: List[transforms.Compose] = [
@@ -126,7 +121,7 @@ class ConjuntoGeneralMedMNIST(Dataset):
         lista_transformaciones.extend(
             [
                 transforms.ToTensor(),
-                TransformacionGrisesACanales(),
+                self._RepeatChannels(),
                 transforms.Normalize(
                     mean=[0.485, 0.456, 0.406],
                     std=[0.229, 0.224, 0.225],
@@ -136,32 +131,12 @@ class ConjuntoGeneralMedMNIST(Dataset):
         return transforms.Compose(lista_transformaciones)
 
     @staticmethod
-    def _procesar_imagen_numpy(imagen: np.ndarray) -> Image.Image:
-        """Convierte un arreglo numpy a imagen PIL manejando 2D, 3D y 4D."""
+    def _a_pil(imagen: np.ndarray) -> Image.Image:
+        """Convierte un arreglo numpy a imagen PIL manteniendo el modo correcto."""
         if imagen.ndim == 2:
             return Image.fromarray(imagen.astype(np.uint8), mode="L")
         if imagen.ndim == 3:
-            if imagen.shape[0] in {1, 3}:
-                imagen = np.moveaxis(imagen, 0, -1)
-            if imagen.shape[-1] == 1:
-                return Image.fromarray(imagen[..., 0].astype(np.uint8), mode="L")
-            if imagen.shape[-1] == 3:
-                return Image.fromarray(imagen.astype(np.uint8))
-            proyeccion = imagen.max(axis=0)
-            return Image.fromarray(proyeccion.astype(np.uint8), mode="L")
-        if imagen.ndim == 4:
-            if imagen.shape[0] in {1, 3}:
-                # Estructura (C, D, H, W); colapsamos la dimensión de profundidad.
-                comprimido = imagen.max(axis=1)
-                return ConjuntoGeneralMedMNIST._procesar_imagen_numpy(comprimido)
-            if imagen.shape[-1] in {1, 3}:
-                # Estructura (D, H, W, C); colapsamos la profundidad.
-                comprimido = imagen.max(axis=0)
-                return ConjuntoGeneralMedMNIST._procesar_imagen_numpy(comprimido)
-            proyeccion = imagen.max(axis=0)
-            if proyeccion.ndim == 2:
-                return Image.fromarray(proyeccion.astype(np.uint8), mode="L")
-            return ConjuntoGeneralMedMNIST._procesar_imagen_numpy(proyeccion)
+            return Image.fromarray(imagen.astype(np.uint8))
         raise ValueError(f"Dimensiones de imagen no soportadas: {imagen.shape}")
 
     def __len__(self) -> int:
@@ -176,9 +151,15 @@ class ConjuntoGeneralMedMNIST(Dataset):
 
         imagen, etiqueta = dataset[indice_local]
         if isinstance(imagen, np.ndarray):
-            imagen = self._procesar_imagen_numpy(imagen)
+            imagen = self._a_pil(imagen)
+
         if isinstance(etiqueta, (np.ndarray, list)):
-            etiqueta = self._convertir_etiqueta(np.array(etiqueta))
+            etiqueta_array = np.array(etiqueta).squeeze()
+            if etiqueta_array.ndim == 0:
+                etiqueta = int(etiqueta_array)
+            else:
+                # Para etiquetas multi-etiqueta (p. ej., ChestMNIST) tomamos el índice con mayor probabilidad.
+                etiqueta = int(np.argmax(etiqueta_array))
         etiqueta_global = offset + int(etiqueta)
 
         tensor_imagen = self.transformacion(imagen)
@@ -188,69 +169,16 @@ class ConjuntoGeneralMedMNIST(Dataset):
         """Devuelve el diccionario con offsets y clases por dataset."""
         return self._informacion
 
-    @staticmethod
-    def _inferir_numero_clases(info: Dict[str, object], nombre: str) -> int:
-        """Obtiene el número de clases, tolerando entradas sin 'n_classes'."""
-        if "n_classes" in info:
-            return int(info["n_classes"])
 
-        etiquetas = info.get("label")
-        if isinstance(etiquetas, dict) and etiquetas:
-            return len(etiquetas)
+def construir_modelo(total_clases: int) -> nn.Module:
+    """Inicializa EfficientNet-B0 con pesos aleatorios y ajusta la última capa."""
+    modelo = efficientnet_b0(weights=None)
 
-        tarea = str(info.get("task", "")).lower()
-        if "multi-label" in tarea:
-            if isinstance(etiquetas, dict) and etiquetas:
-                return len(etiquetas)
-            raise ValueError(
-                f"No se pudo inferir el número de clases para el dataset multi-etiqueta '{nombre}'."
-            )
-
-        raise ValueError(
-            f"No se encontró 'n_classes' ni 'label' para el dataset '{nombre}'."
-        )
-
-    @staticmethod
-    def _convertir_etiqueta(etiqueta: np.ndarray) -> int:
-        """Convierte etiquetas de distintos formatos a un índice entero."""
-        etiqueta = np.array(etiqueta).squeeze()
-
-        if etiqueta.ndim == 0:
-            return int(etiqueta.item())
-
-        if etiqueta.ndim == 1:
-            # Para problemas multi-etiqueta seleccionamos la primera clase positiva;
-            # si no hay ninguna, devolvemos 0 para mantener la consistencia.
-            indices_positivos = np.flatnonzero(etiqueta)
-            if indices_positivos.size > 0:
-                return int(indices_positivos[0])
-            return 0
-
-        raise ValueError(f"No se puede convertir la etiqueta con forma {etiqueta.shape} a entero.")
-
-
-class TransformacionGrisesACanales:
-    """Replica canales de tensores en escala de grises a 3 canales."""
-
-    def __call__(self, tensor: torch.Tensor) -> torch.Tensor:
-        if tensor.dim() == 3 and tensor.shape[0] == 1:
-            return tensor.repeat(3, 1, 1)
-        return tensor
-
-    def __repr__(self) -> str:  # pragma: no cover
-        return f"{self.__class__.__name__}()"
-
-
-def construir_modelo(total_clases: int, usar_pesos_imagenet: bool) -> nn.Module:
-    """Inicializa la ResNet-18 ajustando la capa de salida al número total de clases."""
-    if usar_pesos_imagenet:
-        pesos = ResNet18_Weights.DEFAULT
-        modelo = resnet18(weights=pesos)
-    else:
-        modelo = resnet18(weights=None)
-    caracteristicas = modelo.fc.in_features
-    modelo.fc = nn.Linear(caracteristicas, total_clases)
+    # EfficientNet-B0 tiene la cabeza en classifier[1]
+    in_features = modelo.classifier[1].in_features
+    modelo.classifier[1] = nn.Linear(in_features, total_clases)
     return modelo
+
 
 
 def crear_cargadores(
@@ -260,8 +188,6 @@ def crear_cargadores(
     tamano_imagen: int,
     usar_aumentos: bool,
     trabajadores: int,
-    mapa_offsets: Optional[Dict[str, int]] = None,
-    total_clases_global: Optional[int] = None,
 ) -> Tuple[DataLoader, Optional[DataLoader], DataLoader, Dict[str, RegistroDataset]]:
     """Crea y devuelve los DataLoaders de entrenamiento, validación y prueba."""
     conjunto_entrenamiento = ConjuntoGeneralMedMNIST(
@@ -270,8 +196,6 @@ def crear_cargadores(
         descarga=descarga,
         tamano_imagen=tamano_imagen,
         usar_aumentos=usar_aumentos,
-        mapa_offsets=mapa_offsets,
-        total_clases_global=total_clases_global,
     )
 
     try:
@@ -281,8 +205,6 @@ def crear_cargadores(
             descarga=descarga,
             tamano_imagen=tamano_imagen,
             usar_aumentos=False,
-            mapa_offsets=mapa_offsets,
-            total_clases_global=total_clases_global,
         )
     except Exception:
         conjunto_validacion = None
@@ -293,8 +215,6 @@ def crear_cargadores(
         descarga=descarga,
         tamano_imagen=tamano_imagen,
         usar_aumentos=False,
-        mapa_offsets=mapa_offsets,
-        total_clases_global=total_clases_global,
     )
 
     cargador_entrenamiento = DataLoader(
@@ -427,6 +347,42 @@ def evaluar_modelo(
     return perdida_promedio, exactitud, metricas_por_dataset
 
 
+def evaluar_baseline(
+    modelo: nn.Module,
+    cargador_entrenamiento: DataLoader,
+    cargador_validacion: Optional[DataLoader],
+    cargador_prueba: DataLoader,
+    criterio: nn.Module,
+    dispositivo: torch.device,
+) -> Dict[str, Dict[str, object]]:
+    """Evalúa el modelo sin entrenar para medir la ganancia inicial."""
+    perdida_ent, exactitud_ent, _ = evaluar_modelo(
+        modelo, cargador_entrenamiento, criterio, dispositivo
+    )
+
+    cargador_referencia: DataLoader
+    nombre_referencia: str
+    if cargador_validacion is not None:
+        cargador_referencia = cargador_validacion
+        nombre_referencia = "validacion"
+    else:
+        cargador_referencia = cargador_prueba
+        nombre_referencia = "prueba"
+
+    perdida_ref, exactitud_ref, _ = evaluar_modelo(
+        modelo, cargador_referencia, criterio, dispositivo
+    )
+
+    return {
+        "entrenamiento": {"perdida": perdida_ent, "exactitud": exactitud_ent},
+        "referencia": {
+            "nombre": nombre_referencia,
+            "perdida": perdida_ref,
+            "exactitud": exactitud_ref,
+        },
+    }
+
+
 def construir_scheduler(
     optimizador: Optimizer,
     tipo_scheduler: Optional[str],
@@ -499,19 +455,69 @@ def recorrer_entrenamiento(
     return historial, mejor_estado
 
 
+def _a_flotantes(valores: List[Optional[float]]) -> List[float]:
+    """Convierte None en NaN para mantener la alineación en las gráficas."""
+    return [float(valor) if valor is not None else float("nan") for valor in valores]
+
+
+def generar_graficas(
+    historial: List[Dict[str, Optional[float]]], ruta_reporte: Path
+) -> Dict[str, str]:
+    """Genera y guarda las gráficas de exactitud y pérdida."""
+    epocas = [registro["epoca"] for registro in historial]
+    exactitud_ent = _a_flotantes([registro.get("exactitud_entrenamiento") for registro in historial])
+    exactitud_val = _a_flotantes([registro.get("exactitud_validacion") for registro in historial])
+    perdida_ent = _a_flotantes([registro.get("perdida_entrenamiento") for registro in historial])
+    perdida_val = _a_flotantes([registro.get("perdida_validacion") for registro in historial])
+
+    ruta_reporte.parent.mkdir(parents=True, exist_ok=True)
+    ruta_exactitud = ruta_reporte.parent / f"{ruta_reporte.stem}_curva_exactitud.png"
+    ruta_perdida = ruta_reporte.parent / f"{ruta_reporte.stem}_curva_perdida.png"
+
+    plt.figure(figsize=(7, 4))
+    plt.plot(epocas, exactitud_ent, marker="o", label="Entrenamiento")
+    plt.plot(epocas, exactitud_val, marker="o", label="Validación/Prueba")
+    plt.title("Exactitud vs épocas")
+    plt.xlabel("Época")
+    plt.ylabel("Exactitud")
+    plt.grid(True, linestyle="--", alpha=0.4)
+    plt.legend()
+    plt.tight_layout()
+    plt.savefig(ruta_exactitud, dpi=150)
+    plt.close()
+
+    plt.figure(figsize=(7, 4))
+    plt.plot(epocas, perdida_ent, marker="o", label="Entrenamiento")
+    plt.plot(epocas, perdida_val, marker="o", label="Validación/Prueba")
+    plt.title("Pérdida vs épocas")
+    plt.xlabel("Época")
+    plt.ylabel("Pérdida")
+    plt.grid(True, linestyle="--", alpha=0.4)
+    plt.legend()
+    plt.tight_layout()
+    plt.savefig(ruta_perdida, dpi=150)
+    plt.close()
+
+    return {"exactitud": str(ruta_exactitud), "perdida": str(ruta_perdida)}
+
+
 def guardar_reporte(
     ruta_salida: Path,
     argumentos: argparse.Namespace,
     historial: List[Dict[str, float]],
     metricas_prueba: Dict[str, object],
     informacion_datasets: Dict[str, RegistroDataset],
+    metricas_iniciales: Dict[str, object],
+    rutas_graficas: Dict[str, str],
 ) -> None:
     """Genera un archivo JSON con la configuración y resultados del entrenamiento."""
     reporte = {
         "fecha": datetime.now().isoformat(),
         "configuracion": vars(argumentos),
         "historial_epocas": historial,
+        "metricas_iniciales": metricas_iniciales,
         "metricas_prueba": metricas_prueba,
+        "graficas": rutas_graficas,
         "datasets": {
             nombre: {
                 "offset": info.indice_inicial,
@@ -528,7 +534,7 @@ def guardar_reporte(
 def parsear_argumentos() -> argparse.Namespace:
     """Define y parsea los argumentos de la línea de comandos."""
     parser = argparse.ArgumentParser(
-        description="Entrena una ResNet-18 como modelo general para MedMNIST."
+        description="Entrena una EfficientNet-B0 desde cero para un clasificador general de MedMNIST."
     )
     parser.add_argument(
         "--datasets",
@@ -575,11 +581,6 @@ def parsear_argumentos() -> argparse.Namespace:
         help="Descarga los datasets si no están disponibles localmente.",
     )
     parser.add_argument(
-        "--sin-preentrenar",
-        action="store_true",
-        help="Si se indica, no se cargan pesos preentrenados en ImageNet.",
-    )
-    parser.add_argument(
         "--dispositivo",
         default="cuda" if torch.cuda.is_available() else "cpu",
         help="Dispositivo a utilizar (cuda o cpu).",
@@ -587,9 +588,10 @@ def parsear_argumentos() -> argparse.Namespace:
     parser.add_argument(
         "--salida",
         type=Path,
-        default=Path("resultados") / "reporte_resnet_general.json",
-        help="Ruta del archivo JSON donde se guardarán los resultados.",
+        default=Path("resultados") / "reporte_efficientnet_scratch.json",
+        help="Ruta del archivo JSON donde se guardarán los resultados y gráficas.",
     )
+
     parser.add_argument(
         "--trabajadores",
         type=int,
@@ -637,8 +639,7 @@ def main() -> None:
     )
 
     modelo = construir_modelo(
-        total_clases=sum(info.clases for info in informacion_datasets.values()),
-        usar_pesos_imagenet=not argumentos.sin_preentrenar,
+        total_clases=sum(info.clases for info in informacion_datasets.values())
     )
     modelo.to(dispositivo)
 
@@ -655,7 +656,31 @@ def main() -> None:
         paciencia=argumentos.paciencia_scheduler,
     )
 
-    historial, mejor_estado = recorrer_entrenamiento(
+    metricas_iniciales = evaluar_baseline(
+        modelo=modelo,
+        cargador_entrenamiento=cargador_entrenamiento,
+        cargador_validacion=cargador_validacion,
+        cargador_prueba=cargador_prueba,
+        criterio=criterio,
+        dispositivo=dispositivo,
+    )
+
+    print(
+        f"Exactitud inicial ({metricas_iniciales['referencia']['nombre']}): "
+        f"{metricas_iniciales['referencia']['exactitud']:.4f}"
+    )
+
+    historial_base = [
+        {
+            "epoca": 0,
+            "perdida_entrenamiento": metricas_iniciales["entrenamiento"]["perdida"],
+            "exactitud_entrenamiento": metricas_iniciales["entrenamiento"]["exactitud"],
+            "perdida_validacion": metricas_iniciales["referencia"]["perdida"],
+            "exactitud_validacion": metricas_iniciales["referencia"]["exactitud"],
+        }
+    ]
+
+    historial_entrenamiento, mejor_estado = recorrer_entrenamiento(
         modelo=modelo,
         cargador_entrenamiento=cargador_entrenamiento,
         cargador_validacion=cargador_validacion,
@@ -665,6 +690,7 @@ def main() -> None:
         epocas=argumentos.epocas,
         dispositivo=dispositivo,
     )
+    historial = historial_base + historial_entrenamiento
 
     if mejor_estado:
         modelo.load_state_dict(mejor_estado)
@@ -689,12 +715,16 @@ def main() -> None:
         f"Perdida en prueba: {perdida_prueba:.4f}"
     )
 
+    rutas_graficas = generar_graficas(historial=historial, ruta_reporte=argumentos.salida)
+
     guardar_reporte(
         ruta_salida=argumentos.salida,
         argumentos=argumentos,
         historial=historial,
         metricas_prueba=metricas_prueba,
         informacion_datasets=informacion_datasets,
+        metricas_iniciales=metricas_iniciales,
+        rutas_graficas=rutas_graficas,
     )
 
 

@@ -1,0 +1,15 @@
+{
+  "fecha": "2025-11-24T11:36:29.796887",
+  "configuracion": {
+    "datasets": [
+      "bloodmnist"
+    ],
+    "epocas": 5,
+    "tamano_lote": 64,
+    "tasa_aprendizaje": 0.001,
+    "decaimiento_peso": 0.0001,
+    "tamano_imagen": 32,
+    "usar_aumentos": true,
+    "descargar": true,
+    "dispositivo": "cpu",
+    "salida": 
